@@ -58,10 +58,18 @@ object TaskGroupBuilder {
 
     val executorInfo = computeExecutorInfo(podDefinition, resourceMatch.portsMatch, instanceId)
 
+    val envPrefix: Option[String] = config.envVarsPrefix.get
+    val endpoints = for {
+      container <- podDefinition.containers
+      endpoint <- container.endpoints
+    } yield endpoint
+
+    val portsEnvVars = portEnvVars(endpoints, resourceMatch.hostPorts, envPrefix)
+
     val taskGroup = mesos.TaskGroupInfo.newBuilder
 
     podDefinition.containers
-      .map(computeTaskInfo(_, podDefinition, offer, instanceId, config, resourceMatch))
+      .map(computeTaskInfo(_, podDefinition, offer, instanceId, config, portsEnvVars))
       .foreach(taskGroup.addTasks)
 
     Some((executorInfo.build, taskGroup.build, resourceMatch.hostPorts))
@@ -73,8 +81,7 @@ object TaskGroupBuilder {
     offer: mesos.Offer,
     instanceId: Instance.Id,
     config: MarathonConf,
-    resourceMatch: ResourceMatcher.ResourceMatch
-  ): mesos.TaskInfo.Builder = {
+    portsEnvVars: Map[String, String]): mesos.TaskInfo.Builder = {
     val builder = mesos.TaskInfo.newBuilder
       .setName(container.name)
       .setTaskId(mesos.TaskID.newBuilder.setValue(instanceId.idString))
@@ -93,15 +100,12 @@ object TaskGroupBuilder {
           mesos.Label.newBuilder.setKey(key).setValue(value).build
       }.asJava))
 
-    val envPrefix: Option[String] = config.envVarsPrefix.get
-
     val commandInfo = computeCommandInfo(
       podDefinition,
       instanceId,
       container,
       offer.getHostname,
-      resourceMatch.hostPorts,
-      envPrefix)
+      portsEnvVars)
 
     builder.setCommand(commandInfo)
 
@@ -175,8 +179,7 @@ object TaskGroupBuilder {
     instanceId: Instance.Id,
     container: raml.MesosContainer,
     host: String,
-    hostPorts: Seq[Option[Int]],
-    envPrefix: Option[String]): mesos.CommandInfo.Builder = {
+    portsEnvVars: Map[String, String]): mesos.CommandInfo.Builder = {
     val commandInfo = mesos.CommandInfo.newBuilder
 
     container.exec.foreach{ exec =>
@@ -221,9 +224,7 @@ object TaskGroupBuilder {
 
     val labels = podDefinition.labels ++ container.labels.map(_.values).getOrElse(Map.empty[String, String])
 
-    val labelEnvVars = labelsToEnvVars(labels)
-
-    // TODO: port env variables (probably factor out some functions in 'TaskBuilder')
+    val labelEnvVars = EnvironmentHelper.labelsToEnvVars(labels)
 
     // Variables defined on task level should override ones defined at pod level.
     // Therefore the order here is important. Values for existing keys will be overwritten in the order they are added.
@@ -231,7 +232,8 @@ object TaskGroupBuilder {
       taskEnvVars ++
       hostEnvVar ++
       taskContextEnvVars ++
-      labelEnvVars)
+      labelEnvVars ++
+      portsEnvVars)
       .map {
         case (name, value) =>
           mesos.Environment.Variable.newBuilder.setName(name).setValue(value).build
@@ -348,6 +350,23 @@ object TaskGroupBuilder {
     builder
   }
 
+  private[this] def portEnvVars(
+    endpoints: Seq[raml.Endpoint],
+    hostPorts: Seq[Option[Int]],
+    envPrefix: Option[String]): Map[String, String] = {
+    val declaredPorts = endpoints.flatMap(_.containerPort)
+    val portNames = endpoints.map(endpoint => Some(endpoint.name))
+
+    val portEnvVars = EnvironmentHelper.portsEnv(declaredPorts, hostPorts, portNames)
+
+    envPrefix match {
+      case Some(prefix) =>
+        portEnvVars.map{ case (key, value) => (prefix + key, value) }
+      case None =>
+        portEnvVars
+    }
+  }
+
   private[this] def taskContextEnv(
     container: raml.MesosContainer,
     version: Timestamp,
@@ -364,23 +383,6 @@ object TaskGroupBuilder {
     ).collect {
         case (key, Some(value)) => key -> value
       }
-  }
-
-  private[this] def labelsToEnvVars(labels: Map[String, String]): Map[String, String] = {
-    val maxEnvironmentVarLength = 512
-    val labelEnvironmentKeyPrefix = "MARATHON_APP_LABEL_"
-    val maxVariableLength = maxEnvironmentVarLength - labelEnvironmentKeyPrefix.length
-
-    def escape(name: String): String = name.replaceAll("[^a-zA-Z0-9_]+", "_").toUpperCase
-
-    val validLabels = labels.collect {
-      case (key, value) if key.length < maxVariableLength
-        && value.length < maxEnvironmentVarLength => escape(key) -> value
-    }
-
-    val names = Map("MARATHON_APP_LABELS" -> validLabels.keys.mkString(" "))
-    val values = validLabels.map { case (key, value) => s"$labelEnvironmentKeyPrefix$key" -> value }
-    names ++ values
   }
 
   private[this] def scalarResource(name: String, value: Double): mesos.Resource.Builder = {
