@@ -173,7 +173,12 @@ class TaskBuilder(
     }
 
     mesosHealthChecks.headOption.foreach(builder.setHealthCheck)
-    taskBuildOpt.foreach(_.taskInfo(runSpec, builder)) // invoke builder plugins
+
+    // invoke builder plugins
+    runSpec match {
+      case app: AppDefinition => taskBuildOpt.foreach(_.taskInfo(app, builder))
+      case spec: RunSpec => log.warn(s"Can not customize TaskInfo for $spec, since the type is not supported")
+    }
 
     Some(builder.build -> resourceMatch.hostPorts)
   }

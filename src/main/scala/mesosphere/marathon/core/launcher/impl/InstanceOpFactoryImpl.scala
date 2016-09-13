@@ -7,7 +7,7 @@ import mesosphere.marathon.core.launcher.{ InstanceOp, InstanceOpFactory }
 import mesosphere.marathon.core.task.{ Task, InstanceStateOp }
 import mesosphere.marathon.core.plugin.PluginManager
 import mesosphere.marathon.plugin.task.RunSpecTaskProcessor
-import mesosphere.marathon.plugin.{ RunSpec => PluginAppDefinition }
+import mesosphere.marathon.plugin.{ PodSpec, ApplicationSpec }
 import mesosphere.marathon.state.{ ResourceRole, RunSpec }
 import mesosphere.mesos.ResourceMatcher.ResourceSelector
 import mesosphere.mesos.{ PersistentVolumeMatcher, ResourceMatcher, TaskBuilder }
@@ -196,10 +196,10 @@ class InstanceOpFactoryImpl(
   }
 
   def combine(processors: Seq[RunSpecTaskProcessor]): RunSpecTaskProcessor = new RunSpecTaskProcessor {
-    override def taskInfo(runSpec: PluginAppDefinition, builder: TaskInfo.Builder): Unit = {
+    override def taskInfo(runSpec: ApplicationSpec, builder: TaskInfo.Builder): Unit = {
       processors.foreach(_.taskInfo(runSpec, builder))
     }
-    override def taskGroup(runSpec: PluginAppDefinition, builder: TaskGroupInfo.Builder): Unit = {
+    override def taskGroup(runSpec: PodSpec, builder: TaskGroupInfo.Builder): Unit = {
       processors.foreach(_.taskGroup(runSpec, builder))
     }
   }
