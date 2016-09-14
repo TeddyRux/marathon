@@ -415,7 +415,7 @@ class TaskGroupBuilderTest extends UnitTest {
     }
 
     "create health check definitions" in {
-      val offer = MarathonTestHelper.makeBasicOffer(cpus = 3.1, mem = 416.0).build
+      val offer = MarathonTestHelper.makeBasicOffer(cpus = 3.1, mem = 416.0, beginPort = 1200, endPort = 1300).build
 
       val pod = TaskGroupBuilder.build(
         PodDefinition(
@@ -532,7 +532,7 @@ class TaskGroupBuilderTest extends UnitTest {
     }
 
     "support networks and port mappings for pods and containers" in {
-      val offer = MarathonTestHelper.makeBasicOffer(cpus = 3.1, mem = 416.0).build
+      val offer = MarathonTestHelper.makeBasicOffer(cpus = 3.1, mem = 416.0, beginPort = 8000, endPort = 9000).build
 
       val pod = TaskGroupBuilder.build(
         PodDefinition(
@@ -578,12 +578,18 @@ class TaskGroupBuilderTest extends UnitTest {
 
       val (executorInfo, taskGroupInfo, _) = pod.get
 
-      assert(executorInfo.getContainer.getNetworkInfosCount == 1)
-      assert(executorInfo.getContainer.getNetworkInfosList.find(_.getName == "network-a").isDefined)
-
       assert(taskGroupInfo.getTasksCount == 2)
 
-      // TODO(nfnt): Test port mappings
+      assert(executorInfo.getContainer.getNetworkInfosCount == 1)
+
+      val networkInfo = executorInfo.getContainer.getNetworkInfosList.find(_.getName == "network-a")
+
+      assert(networkInfo.isDefined)
+
+      val portMappings = networkInfo.get.getPortMappingsList
+
+      assert(portMappings.find(_.getContainerPort == 80).get.getHostPort == 8080)
+      assert(portMappings.find(_.getContainerPort == 1234).get.getHostPort != 0)
     }
   }
 }

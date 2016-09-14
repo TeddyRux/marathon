@@ -56,15 +56,18 @@ object TaskGroupBuilder {
     // TODO: probably set unique ID for each task
     val instanceId = newInstanceId(podDefinition.id)
 
-    val executorInfo = computeExecutorInfo(podDefinition, resourceMatch.portsMatch, instanceId)
-
-    val envPrefix: Option[String] = config.envVarsPrefix.get
-    val endpoints = for {
+    val allEndpoints = for {
       container <- podDefinition.containers
       endpoint <- container.endpoints
     } yield endpoint
 
-    val portsEnvVars = portEnvVars(endpoints, resourceMatch.hostPorts, envPrefix)
+    val portMappings = computePortMappings(allEndpoints, resourceMatch.hostPorts)
+
+    val executorInfo = computeExecutorInfo(podDefinition, resourceMatch.portsMatch, portMappings, instanceId)
+
+    val envPrefix: Option[String] = config.envVarsPrefix.get
+
+    val portsEnvVars = portEnvVars(allEndpoints, resourceMatch.hostPorts, envPrefix)
 
     val taskGroup = mesos.TaskGroupInfo.newBuilder
 
@@ -73,6 +76,30 @@ object TaskGroupBuilder {
       .foreach(taskGroup.addTasks)
 
     Some((executorInfo.build, taskGroup.build, resourceMatch.hostPorts))
+  }
+
+  // The resource match provides us with a list of host ports.
+  // Each port mapping corresponds to an item in that list.
+  // We use that list to swap the dynamic ports (ports set to 0) with the matched ones.
+  private[this] def computePortMappings(
+    endpoints: Seq[raml.Endpoint],
+    hostPorts: Seq[Option[Int]]): Seq[mesos.NetworkInfo.PortMapping] = {
+
+    endpoints.zip(hostPorts).collect {
+      case (mapping, Some(hostPort)) =>
+        if (mapping.containerPort.isEmpty || mapping.containerPort.get == 0) {
+          mesos.NetworkInfo.PortMapping.newBuilder
+            .setHostPort(hostPort)
+            .setContainerPort(hostPort).build
+        } else {
+          val portMapping = mesos.NetworkInfo.PortMapping.newBuilder
+            .setHostPort(hostPort)
+          mapping.containerPort.foreach(portMapping.setContainerPort)
+
+          // TODO(nfnt): set the protocol
+          portMapping.build
+        }
+    }
   }
 
   private[this] def computeTaskInfo(
@@ -123,6 +150,7 @@ object TaskGroupBuilder {
   private[this] def computeExecutorInfo(
     podDefinition: PodDefinition,
     portsMatch: PortsMatch,
+    portMappings: Seq[mesos.NetworkInfo.PortMapping],
     instanceId: Instance.Id): mesos.ExecutorInfo.Builder = {
     val executorID = mesos.ExecutorID.newBuilder.setValue(f"marathon-${instanceId.idString}")
 
@@ -354,6 +382,7 @@ object TaskGroupBuilder {
     endpoints: Seq[raml.Endpoint],
     hostPorts: Seq[Option[Int]],
     envPrefix: Option[String]): Map[String, String] = {
+    // TODO(nfnt): Refactor this to use portMappings
     val declaredPorts = endpoints.flatMap(_.containerPort)
     val portNames = endpoints.map(endpoint => Some(endpoint.name))
 
